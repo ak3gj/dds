@@ -5,8 +5,8 @@ import cv2 as cv
 from dds_utils import (Results, Region, calc_iou, merge_images,
                        extract_images_from_video, merge_boxes_in_results,
                        compute_area_of_frame, calc_area, read_results_dict)
-from .object_detector import Detector
-
+from .face_detector import Detector
+# from .object_detector import Detector
 
 class Server:
     """The server component of DDS protocol. Responsible for running DNN
@@ -50,7 +50,9 @@ class Server:
 
         if fnames is None:
             fnames = sorted(os.listdir(images_direc))
+            
         self.logger.info(f"Running inference on {len(fnames)} frames")
+        
         for fname in fnames:
             if "png" not in fname:
                 continue
@@ -63,9 +65,9 @@ class Server:
                 image = cv.imread(image_path)
             image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
 
-            detection_results, rpn_results = (
-                self.detector.infer(image))
+            detection_results, rpn_results = (self.detector.infer(image))
             frame_with_no_results = True
+
             for label, conf, (x, y, w, h) in detection_results:
                 if (self.config.min_object_size and
                         w * h < self.config.min_object_size) or w * h == 0.0:
@@ -74,23 +76,25 @@ class Server:
                            resolution, origin="mpeg")
                 final_results.append(r)
                 frame_with_no_results = False
+
             for label, conf, (x, y, w, h) in rpn_results:
                 r = Region(fid, x, y, w, h, conf, label,
                            resolution, origin="generic")
                 rpn_regions.append(r)
                 frame_with_no_results = False
+
             self.logger.debug(
                 f"Got {len(final_results)} results "
                 f"and {len(rpn_regions)} for {fname}")
 
             if frame_with_no_results:
-                final_results.append(
-                    Region(fid, 0, 0, 0, 0, 0.1, "no obj", resolution))
+                final_results.append(Region(fid, 0, 0, 0, 0, 0.1, "no obj", resolution))
 
         return final_results, rpn_regions
 
     def get_regions_to_query(self, rpn_regions, detections):
         req_regions = Results()
+
         for region in rpn_regions.regions:
             # Continue if the size of region is too large
             if region.w * region.h > self.config.size_obj:
@@ -113,11 +117,13 @@ class Server:
             region.enlarge(self.config.rpn_enlarge_ratio)
             req_regions.add_single_result(
                 region, self.config.intersection_threshold)
+
         return req_regions
 
     def simulate_low_query(self, start_fid, end_fid, images_direc,
                            results_dict, simulation=True,
                            rpn_enlarge_ratio=0.0, extract_regions=True):
+        
         if extract_regions:
             # If called from actual implementation
             # This will not run
@@ -145,13 +151,10 @@ class Server:
         rpn_regions = Results()
         # Divide RPN results into detections and RPN regions
         for single_result in batch_results.regions:
-            if (single_result.conf > self.config.prune_score and
-                    single_result.label == "vehicle"):
-                detections.add_single_result(
-                    single_result, self.config.intersection_threshold)
+            if (single_result.conf > self.config.prune_score and single_result.label == "vehicle"):
+                detections.add_single_result(single_result, self.config.intersection_threshold)
             else:
-                rpn_regions.add_single_result(
-                    single_result, self.config.intersection_threshold)
+                rpn_regions.add_single_result(single_result, self.config.intersection_threshold)
 
         regions_to_query = self.get_regions_to_query(rpn_regions, detections)
 
@@ -172,21 +175,19 @@ class Server:
         # Make seperate directory and copy all images to that directory
         merged_images_direc = os.path.join(images_direc, "merged")
         os.makedirs(merged_images_direc, exist_ok=True)
+
         for img in fnames:
             shutil.copy(os.path.join(images_direc, img), merged_images_direc)
 
-        merged_images = merge_images(
-            merged_images_direc, low_images_direc, req_regions)
-        results, _ = self.perform_detection(
-            merged_images_direc, self.config.high_resolution, fnames,
-            merged_images)
+        merged_images = merge_images(merged_images_direc, low_images_direc, req_regions)
+
+        results, _ = self.perform_detection(merged_images_direc, self.config.high_resolution, fnames, merged_images)
 
         results_with_detections_only = Results()
         for r in results.regions:
             if r.label == "no obj":
                 continue
-            results_with_detections_only.add_single_result(
-                r, self.config.intersection_threshold)
+            results_with_detections_only.add_single_result(r, self.config.intersection_threshold)
 
         high_only_results = Results()
         area_dict = {}
@@ -226,20 +227,17 @@ class Server:
         extract_images_from_video("server_temp", req_regions)
         fnames = [f for f in os.listdir("server_temp") if "png" in f]
 
-        results, rpn = self.perform_detection(
-            "server_temp", self.config.low_resolution, fnames)
+        results, rpn = self.perform_detection("server_temp", self.config.low_resolution, fnames)
 
         batch_results = Results()
-        batch_results.combine_results(
-            results, self.config.intersection_threshold)
+        batch_results.combine_results(results, self.config.intersection_threshold)
 
         # need to merge this because all previous experiments assumed
         # that low (mpeg) results are already merged
         batch_results = merge_boxes_in_results(
             batch_results.regions_dict, 0.3, 0.3)
 
-        batch_results.combine_results(
-            rpn, self.config.intersection_threshold)
+        batch_results.combine_results(rpn, self.config.intersection_threshold)
 
         detections, regions_to_query = self.simulate_low_query(
             start_fid, end_fid, "server_temp", batch_results.regions_dict,
